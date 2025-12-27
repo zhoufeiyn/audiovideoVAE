@@ -1,0 +1,11 @@
+torch==2.8.0
+torchvision==0.23.0
+torchaudio==2.8.0
+opencv-python>=4.9.0.80
+tqdm
+imageio[ffmpeg]
+easydict
+imageio-ffmpeg
+decord
+einops
+numpy>=1.23.5,<2
