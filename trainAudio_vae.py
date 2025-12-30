@@ -199,7 +199,8 @@ def main():
             it = iter(dl)
             batch = next(it)
 
-        x = batch["audio"].repeat(2,1,1).to(device, non_blocking=True)
+        # x = batch["audio"].repeat(2,1,1).to(device, non_blocking=True)
+        x = batch["audio"].to(device, non_blocking=True)
 
         if x.dim()==2:
             x = x[:,None,:]

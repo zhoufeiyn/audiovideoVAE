@@ -8,11 +8,11 @@ from audiotools import AudioSignal
 from audiotools.ml import BaseModel
 from torch import nn
 
-from base import CodecMixin
-from nn.layers import Snake1d
-from nn.layers import WNConv1d
-from nn.layers import WNConvTranspose1d
-from nn.quantize import ResidualVectorQuantize
+from .base import CodecMixin
+from .nn.layers import Snake1d
+from .nn.layers import WNConv1d
+from .nn.layers import WNConvTranspose1d
+from .nn.quantize import ResidualVectorQuantize
 
 
 def init_weights(m):

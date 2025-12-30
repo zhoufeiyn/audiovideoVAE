@@ -243,7 +243,7 @@ def main():
             it = iter(dl)
             batch = next(it)
 
-        x = batch["video"].repeat(3,1,1,1,1).to(device, non_blocking=True)
+        x = batch["video"].to(device, non_blocking=True)
 
         device_type = "cuda" if device.type == "cuda" else "cpu"
         with torch.autocast(device_type=device_type, dtype=amp_dtype, enabled=(amp_dtype is not None)):
