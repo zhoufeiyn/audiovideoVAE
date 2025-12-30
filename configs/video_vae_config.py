@@ -11,7 +11,7 @@ class TrainVideoVAEConfig:
     # ===dataset===
     video_root: str = './data/video'
     audio_root: str = './data/audio'
-    clip_len: int = 90
+    clip_len: int = 120
     size: int = 256
     # ---- temporal sampling ----
     fps_target: int = 0  # target fps; 0 = keep original fps

@@ -14,7 +14,7 @@ class TrainAudioVAEConfig:
     # === dataset===
     video_root: str = './data/video'
     audio_root: str = './data/audio'
-    clip_len: int = 90
+    clip_len: int = 120
     size: int = 256
     # ---- temporal sampling ----
     fps_target: int = 0
@@ -67,8 +67,8 @@ class TrainAudioVAEConfig:
     wd: float = 1e-2
     max_steps: int = 10000
     grad_clip: float = 1.0
-    log_every: int = 100
-    save_every: int = 1000
+    log_every: int = 50
+    save_every: int = 500
 
     # ========= system =========
     amp_dtype: str = "bf16"
