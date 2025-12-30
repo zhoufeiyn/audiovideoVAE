@@ -4,9 +4,12 @@ from typing import Tuple
 @dataclass
 class TrainVideoVAEConfig:
     # ==basic===
-    out_dir: str = './run/vae'
-    resume: bool = False
-    resume_ckpt_path: str = './run/vae/ckpt_final.pth'
+    out_dir_video: str = './run/vae_video'
+    out_dir_audio: str = './run/vae_audio'
+    resume_video: bool = False
+    resume_audio: bool = False
+    resume_ckpt_path_video: str = './run/vae_video/ckpt_final.pth'
+    resume_ckpt_path_audio: str = './run/vae_audio/ckpt_final.pth'
 
     # ===dataset===
     video_root: str = './data/video'
