@@ -56,11 +56,11 @@ class VectorQuantize(nn.Module):
 
         # Factorized codes (ViT-VQGAN) Project input into low-dimensional space
         z_e = self.in_proj(z)  # z_e : (B x 8 x T)
-        z_q, indices = self.decode_latents(z_e)
+        z_q, indices = self.decode_latents(z_e) #z_q: (B x 8 x T), indices: (B, T)
 
         commitment_loss = F.mse_loss(z_e, z_q.detach(), reduction="none").mean([1, 2])
         codebook_loss = F.mse_loss(z_q, z_e.detach(), reduction="none").mean([1, 2])
-
+        # z_q get from argmax, non-differentiable; z_e is differentiable
         z_q = (
             z_e + (z_q - z_e).detach()
         )  # noop in forward pass, straight-through gradient estimator in backward pass
@@ -90,9 +90,9 @@ class VectorQuantize(nn.Module):
             + codebook.pow(2).sum(1, keepdim=True).t() # (1024, 1)
         ) # (B*T, 1024)
         
-        #.max(dim)[0] → 最大值; .max(dim)[1] → 最大值对应的 索引 index
-        indices = rearrange((-dist).max(1)[1], "(b t) -> b t", b=latents.size(0))
-        z_q = self.decode_code(indices)
+        #距离最近-> max(-dist); .max(dim)[0] → 最大值; .max(dim)[1] → 最大值对应的 索引 index
+        indices = rearrange((-dist).max(1)[1], "(b t) -> b t", b=latents.size(0)) # (B, T)
+        z_q = self.decode_code(indices) # (B, 8, T)
         return z_q, indices
 
 

@@ -10,6 +10,8 @@ class TrainAudioVAEConfig:
     resume_audio: bool = False
     resume_ckpt_path_video: str = './run/vae_video/ckpt_final.pth'
     resume_ckpt_path_audio: str = './run/vae_audio/ckpt_final.pth'
+    ckpt_path_video: str = './run/vae_video/ckpt_final.pth'
+    ckpt_path_audio: str = './run/vae_audio/ckpt_final.pth'
 
     # === dataset===
     video_root: str = './data/video'
