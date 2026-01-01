@@ -65,7 +65,7 @@ class VectorQuantize(nn.Module):
             z_e + (z_q - z_e).detach()
         )  # noop in forward pass, straight-through gradient estimator in backward pass
 
-        z_q = self.out_proj(z_q)
+        z_q = self.out_proj(z_q) # (B, 1024, T)
 
         return z_q, commitment_loss, codebook_loss, indices, z_e
 
@@ -87,7 +87,7 @@ class VectorQuantize(nn.Module):
         dist = (
             encodings.pow(2).sum(1, keepdim=True) # (B*T, 1)
             - 2 * encodings @ codebook.t() # (B*T, 1024)
-            + codebook.pow(2).sum(1, keepdim=True).t() # (1024, 1)
+            + codebook.pow(2).sum(1, keepdim=True).t() # (1,1024)
         ) # (B*T, 1024)
         
         #距离最近-> max(-dist); .max(dim)[0] → 最大值; .max(dim)[1] → 最大值对应的 索引 index
@@ -156,7 +156,7 @@ class ResidualVectorQuantize(nn.Module):
                 Codebook loss to update the codebook
         """
         z_q = 0
-        residual = z
+        residual = z # (B, 1024, T)
         commitment_loss = 0
         codebook_loss = 0
 
@@ -170,7 +170,7 @@ class ResidualVectorQuantize(nn.Module):
             dropout = torch.randint(1, self.n_codebooks + 1, (z.shape[0],))
             n_dropout = int(z.shape[0] * self.quantizer_dropout)
             n_quantizers[:n_dropout] = dropout[:n_dropout]
-            n_quantizers = n_quantizers.to(z.device)
+            n_quantizers = n_quantizers.to(z.device) # (B,),values: 1~10
 
         for i, quantizer in enumerate(self.quantizers):
             if self.training is False and i >= n_quantizers:
@@ -184,18 +184,18 @@ class ResidualVectorQuantize(nn.Module):
             mask = (
                 torch.full((z.shape[0],), fill_value=i, device=z.device) < n_quantizers
             )
-            z_q = z_q + z_q_i * mask[:, None, None]
-            residual = residual - z_q_i
+            z_q = z_q + z_q_i * mask[:, None, None] # (B, 1024, T)
+            residual = residual - z_q_i # (B, 1024, T)
 
             # Sum losses
             commitment_loss += (commitment_loss_i * mask).mean()
             codebook_loss += (codebook_loss_i * mask).mean()
 
             codebook_indices.append(indices_i)
-            latents.append(z_e_i)
+            latents.append(z_e_i) # (B, 8, T)
 
-        codes = torch.stack(codebook_indices, dim=1)
-        latents = torch.cat(latents, dim=1)
+        codes = torch.stack(codebook_indices, dim=1) # (B, 9, T)
+        latents = torch.cat(latents, dim=1) # (B, 8*9, T) VQ inproj output cat
 
         return z_q, codes, latents, commitment_loss, codebook_loss
 
@@ -203,23 +203,23 @@ class ResidualVectorQuantize(nn.Module):
         """Given the quantized codes, reconstruct the continuous representation
         Parameters
         ----------
-        codes : Tensor[B x N x T]
+        codes : Tensor[B x N x T] (B, 9, T)
             Quantized discrete representation of input
         Returns
         -------
-        Tensor[B x D x T]
+        Tensor[B x D x T] (B, 1024, T)
             Quantized continuous representation of input
         """
         z_q = 0.0
         z_p = []
-        n_codebooks = codes.shape[1]
+        n_codebooks = codes.shape[1] # 9
         for i in range(n_codebooks):
-            z_p_i = self.quantizers[i].decode_code(codes[:, i, :])
+            z_p_i = self.quantizers[i].decode_code(codes[:, i, :]) # (B, 8, T)
             z_p.append(z_p_i)
 
-            z_q_i = self.quantizers[i].out_proj(z_p_i)
+            z_q_i = self.quantizers[i].out_proj(z_p_i) # (B, 1024, T)
             z_q = z_q + z_q_i
-        return z_q, torch.cat(z_p, dim=1), codes
+        return z_q, torch.cat(z_p, dim=1), codes # (B, 1024, T), (B, 8*9, T), (B, 9, T)
 
     def from_latents(self, latents: torch.Tensor):
         """Given the unquantized latents, reconstruct the

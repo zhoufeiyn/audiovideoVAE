@@ -2,10 +2,10 @@ import os
 import time
 import random
 import argparse
-
+from audiotools import AudioSignal
 from typing import Tuple
 import numpy as np
-
+from dataclasses import dataclass
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -19,7 +19,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module=r"torchaudio(\..*
 
 from models.VAE.dac import DAC
 from models.VAE.discriminator import Discriminator
-
+from models.VAE.nn import loss
 import logging
 from logging.handlers import RotatingFileHandler
 
@@ -80,27 +80,29 @@ def make_model(cfg: TrainAudioVAEConfig, device: torch.device) -> nn.Module:
         sample_rate=cfg.audio_sample_rate,
     )
     generator.to(device)
-    # discriminator = Discriminator(
-    #     rates=cfg.audio_rates,
-    #     periods=cfg.audio_periods,
-    #     fft_sizes=cfg.audio_fft_sizes,
-    #     sample_rate=cfg.audio_sample_rate,
-    #     bands=cfg.audio_bands,
-    # )
-    # discriminator.to(device)
+    discriminator = Discriminator(
+        rates=cfg.audio_dis_rates,
+        periods=cfg.audio_dis_periods,
+        fft_sizes=cfg.audio_dis_fft_sizes,
+        sample_rate=cfg.audio_sample_rate,
+        bands=cfg.audio_dis_bands,
+    )
+    discriminator.to(device)
     
-    discriminator = None # Stage A no discriminator
+    # discriminator = None # Stage A no discriminator
     
     return generator, discriminator
 
 
-def save_ckpt(path: str, model: nn.Module, optim: torch.optim.Optimizer, step: int):
+def save_ckpt(path: str, generator: nn.Module,discriminator: nn.Module, optim_g: torch.optim.Optimizer, optim_d: torch.optim.Optimizer, step: int):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     torch.save(
         {
             "step": step,
-            "model": model.state_dict(),
-            "optim": optim.state_dict(),
+            "generator": generator.state_dict(),
+            "discriminator": discriminator.state_dict(),
+            "optim_g": optim_g.state_dict(),
+            "optim_d": optim_d.state_dict(),
         },
         path,
     )
@@ -155,12 +157,18 @@ def main():
 
     generator, discriminator = make_model(cfg, device)
     generator.train()
+    discriminator.train()
 
-    # discriminator.train()
 
+    losses = {}
+    losses['loss_stft'] = loss.MultiScaleSTFTLoss(window_lengths=cfg.stft_window_lengths)
+    losses['loss_mel'] = loss.MelSpectrogramLoss(n_mels=cfg.mel_n_mels, window_lengths=cfg.mel_window_lengths, fmin=cfg.mel_fmin, fmax=cfg.mel_fmax, pow=cfg.mel_pow, clamp_eps=cfg.mel_clamp_eps, mag_weight=cfg.mel_mag_weight)
+    losses['loss_adv_GAN'] = loss.GANLoss(discriminator)
+    losses['loss_waveform'] = loss.L1Loss()
 
-    ######### stop here##########
+    
     optim_g = torch.optim.AdamW(generator.parameters(), lr=cfg.lr, weight_decay=cfg.wd,betas=(0.8, 0.99))
+    optim_d = torch.optim.AdamW(discriminator.parameters(), lr=cfg.lr, weight_decay=cfg.wd,betas=(0.8, 0.99))
 
     start_step = 0
     if cfg.out_dir_audio:
@@ -168,8 +176,10 @@ def main():
 
     if cfg.resume_audio and os.path.exists(cfg.resume_ckpt_path_audio):
         ckpt = torch.load(cfg.resume_ckpt_path_audio, map_location="cpu")
-        generator.load_state_dict(ckpt["model"], strict=True)
-        optim_g.load_state_dict(ckpt["optim"])
+        generator.load_state_dict(ckpt["generator"], strict=True)
+        discriminator.load_state_dict(ckpt["discriminator"], strict=True)
+        optim_g.load_state_dict(ckpt["optim_g"])
+        optim_d.load_state_dict(ckpt["optim_d"])
         start_step = int(ckpt.get("step", 0))
         logger.info(f"[resume audio] loaded {cfg.resume_ckpt_path_audio} @ step={start_step}")
     else:
@@ -192,6 +202,7 @@ def main():
     from contextlib import nullcontext
     for step in pbar:
         step_t0 = time.time()
+        output = {}
 
         try:
             batch = next(it)
@@ -212,29 +223,47 @@ def main():
         ctx = torch.autocast(device_type="cuda", dtype=amp_dtype) if use_amp else nullcontext()  
         with ctx:
             out = generator(x)
-            x_rec = out["audio"]
-            loss_wav =F.l1_loss(x_rec, x)
-            loss_vq = 0.25*out["vq/commitment_loss"].mean() + 1.0*out["vq/codebook_loss"].mean()
-            loss = loss_wav + loss_vq
+            commitment_loss = out["vq/commitment_loss"]
+            codebook_loss = out["vq/codebook_loss"]
+            x_rec = AudioSignal(out["audio"], sample_rate=cfg.audio_sample_rate)
+            x= AudioSignal(x, sample_rate=cfg.audio_sample_rate)
 
-            
+        with ctx:
+            output['loss_adv_dis'] = losses['loss_adv_GAN'].discriminator_loss(x_rec, x)
+        optim_d.zero_grad(set_to_none=True)
+        output['loss_adv_dis'].backward()
+        torch.nn.utils.clip_grad_norm_(discriminator.parameters(), 10)
+        optim_d.step()
+
+        with ctx:
+            output['loss_stft'] = losses['loss_stft'](x_rec, x)
+            output['loss_mel'] = losses['loss_mel'](x_rec, x)
+            output['loss_waveform']=losses['loss_waveform'](x_rec, x)
+            (output['loss_adv_gen'], output['loss_adv_feat']) = losses['loss_adv_GAN'].generator_loss(x_rec, x)
+            output['loss_vq_commitment'] = commitment_loss
+            output['loss_vq_codebook'] = codebook_loss
+            output['loss'] = sum(v*output[k] for k,v in cfg.loss_weights.items())
+                  
 
         optim_g.zero_grad(set_to_none=True)
-        loss.backward()
-
-        
-        torch.nn.utils.clip_grad_norm_(generator.parameters(), 1e3)
-
+        output['loss'].backward()
+        torch.nn.utils.clip_grad_norm_(generator.parameters(),1e3)
         optim_g.step()
 
-        # ---- tqdm display: 简洁即可 ----
+        # ---- tqdm display ----
         pbar.set_postfix(
-            loss=f"{loss.item():.4f}",
-            wav=f"{loss_wav.item():.4f}",
-            vq=f"{loss_vq.item():.4f}",
+            loss=f"{output['loss'].item():.4f}",
+            loss_waveform=f"{output['loss_waveform'].item():.4f}",
+            loss_vq_commitment=f"{output['loss_vq_commitment'].item():.4f}",
+            loss_vq_codebook=f"{output['loss_vq_codebook'].item():.4f}",
+            loss_stft=f"{output['loss_stft'].item():.4f}",
+            loss_mel=f"{output['loss_mel'].item():.4f}",
+            loss_adv_gen=f"{output['loss_adv_gen'].item():.4f}",
+            loss_adv_feat=f"{output['loss_adv_feat'].item():.4f}",
+            loss_adv_dis=f"{output['loss_adv_dis'].item():.4f}",
         )
 
-        # ---- logger: 每 log_every step 记录一次详细信息 ----
+        # ---- logger:  log_every step  ----
         if step % cfg.log_every == 0:
             now = time.time()
             iter_time = now - step_t0
@@ -244,32 +273,31 @@ def main():
 
             logger.info(
                 f"step={step} "
-                f"loss={loss.item():.6f} wav={loss_wav.item():.6f} vq={loss_vq.item():.6f} "
-                f"lr={optim_g.param_groups[0]['lr']:.3e} "
+                f"loss={output['loss'].item():.4f} wav={output['loss_waveform'].item():.4f} vq={output['loss_vq_commitment'].item():.4f} "
+                f"loss_vq_codebook={output['loss_vq_codebook'].item():.4f} "
+                f"loss_stft={output['loss_stft'].item():.4f} "
+                f"loss_mel={output['loss_mel'].item():.4f} "
+                f"loss_adv_gen={output['loss_adv_gen'].item():.4f} "
+                f"loss_adv_feat={output['loss_adv_feat'].item():.4f} "
+                f"loss_adv_dis={output['loss_adv_dis'].item():.4f} "
                 f"iter_time={iter_time:.3f}s avg={avg_it_time:.3f}s it/s={it_per_sec:.2f}"
-            )
-
-
-        # ---- save ----
+                )
+        # ---- save reconstruction audio----
         if (step + 1) % cfg.save_every == 0 and cfg.out_dir_audio:
             ckpt_path = os.path.join(cfg.out_dir_audio, f"ckpt_step{step + 1}.pth")
-            save_ckpt(ckpt_path, generator, optim_g, step + 1)
+            save_ckpt(ckpt_path, generator,discriminator, optim_g, optim_d, step + 1)
             logger.info(f"[save] checkpoint -> {ckpt_path}")
-
             with torch.no_grad():
-                out = generator(x)
-                x_rec_vis = out["audio"]
+                out = generator(x.audio_data)["audio"]
                 save_path = os.path.join(cfg.out_dir_audio + f"/step_{step + 1}")
                 os.makedirs(save_path, exist_ok=True)
-
-                
-                save_wav(x, os.path.join(save_path, f"gt_{step+1}.wav"), cfg.audio_sample_rate)
-                save_wav(x_rec_vis, os.path.join(save_path, f"rec_{step+1}.wav"), cfg.audio_sample_rate)
+                save_wav(x.audio_data, os.path.join(save_path, f"gt_{step+1}.wav"), cfg.audio_sample_rate)
+                save_wav(out, os.path.join(save_path, f"rec_{step+1}.wav"), cfg.audio_sample_rate)
                 logger.info(f"[save] audio -> x_rec_{step + 1}.wav")
 
     # final save
     if cfg.out_dir_audio:
-        save_ckpt(os.path.join(cfg.out_dir_audio, "ckpt_final.pth"), generator, optim_g, cfg.max_steps)
+        save_ckpt(os.path.join(cfg.out_dir_audio, "ckpt_final.pth"), generator,discriminator, optim_g, optim_d, cfg.max_steps)
 
 
 if __name__ == "__main__":

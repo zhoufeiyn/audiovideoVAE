@@ -20,7 +20,6 @@ import imageio
 from models.VAE.dac import DAC
 from models.VAE.vae2_2 import WanVAE_
 from torchvision.transforms import functional as TF
-
 # Video decode (fast)
 try:
     from decord import VideoReader, cpu

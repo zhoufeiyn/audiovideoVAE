@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Tuple, List
+from typing import Tuple, List, Dict
 
 @dataclass
 class TrainAudioVAEConfig:
@@ -12,6 +12,8 @@ class TrainAudioVAEConfig:
     resume_ckpt_path_audio: str = './run/vae_audio/ckpt_final.pth'
     ckpt_path_video: str = './run/vae_video/ckpt_final.pth'
     ckpt_path_audio: str = './run/vae_audio/ckpt_final.pth'
+    test_video_root: str = './data/test/video'
+    test_audio_root: str = './data/test/audio'
 
     # === dataset===
     video_root: str = './data/video'
@@ -57,12 +59,22 @@ class TrainAudioVAEConfig:
     quantizer_dropout: float = 1.0
 
     # ========= audio discriminator model =========
-    audio_rates: List[int] = field(default_factory=list)
-    audio_periods: List[int] = field(default_factory=lambda: [2, 3, 5, 7, 11])
-    audio_fft_sizes: List[int] = field(default_factory=lambda: [2048, 1024, 512])
-    audio_bands: List[Tuple[float, float]] = field(
+    audio_dis_rates: List[int] = field(default_factory=list)
+    audio_dis_periods: List[int] = field(default_factory=lambda: [2, 3, 5, 7, 11])
+    audio_dis_fft_sizes: List[int] = field(default_factory=lambda: [2048, 1024, 512])
+    audio_dis_bands: List[Tuple[float, float]] = field(
         default_factory=lambda: [(0.0, 0.1), (0.1, 0.25), (0.25, 0.5), (0.5, 0.75), (0.75, 1.0)]
     )
+
+    # ========= audio losses params =========
+    stft_window_lengths: List[int] = field(default_factory=lambda: [2048, 512])
+    mel_n_mels: List[int] = field(default_factory=lambda: [5, 10, 20, 40, 80, 160, 320])
+    mel_window_lengths: List[int] = field(default_factory=lambda: [32, 64, 128, 256, 512, 1024, 2048])
+    mel_fmin: List[float] = field(default_factory=lambda: [0, 0, 0, 0, 0, 0, 0])
+    mel_fmax: List[float] = field(default_factory=lambda: [None, None, None, None, None, None, None])
+    mel_pow: float = 1.0
+    mel_clamp_eps: float = 1e-5
+    mel_mag_weight: float = 0.0
 
     # ========= training =========
     lr: float = 1e-4
@@ -76,6 +88,17 @@ class TrainAudioVAEConfig:
     amp_dtype: str = "bf16"
     seed: int = 42
 
-    # ========= loss =========
+    # =========video loss =========
     w_l1: float = 1.0
     w_kl: float = 0.0
+    # =========audio loss =========
+    loss_weights: Dict[str, float] = field(default_factory=lambda: {
+        "loss_waveform": 1.0,
+        "loss_vq_commitment": 0.25,
+        "loss_vq_codebook": 1.0,
+        "loss_stft": 1.0,
+        "loss_mel": 15.0,
+        "loss_adv_gen": 0.2,
+        "loss_adv_feat": 1.0,
+        
+    })
